@@ -1,0 +1,11 @@
+{
+  "name": "Hi the app",
+  "description": "A mobile-centric social app where users wave at friends by physically pointing their device at them.",
+  "requestFramePermissions": [
+    "geolocation",
+    "accelerometer",
+    "gyroscope",
+    "magnetometer"
+  ],
+  "majorCapabilities": []
+}

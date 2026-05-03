@@ -1,0 +1,103 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Public user profile",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "displayName": { "type": "string" },
+        "color": { "type": "string", "description": "Hex color for 80s theme" },
+        "createdAt": { "type": "number", "description": "Timestamp" }
+      },
+      "required": ["username", "displayName", "createdAt"]
+    },
+    "UserPrivate": {
+      "title": "UserPrivate",
+      "description": "Private user information",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" }
+      },
+      "required": ["email"]
+    },
+    "Location": {
+      "title": "Location",
+      "description": "User's current GPS location and heading",
+      "type": "object",
+      "properties": {
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "heading": { "type": "number" },
+        "updatedAt": { "type": "number", "description": "Timestamp" }
+      },
+      "required": ["lat", "lng", "updatedAt"]
+    },
+    "Friendship": {
+      "title": "Friendship",
+      "description": "Friendship status between two users",
+      "type": "object",
+      "properties": {
+        "userIds": { "type": "array", "items": { "type": "string" } },
+        "user1": { "type": "string", "description": "Alphabetically earlier UID" },
+        "user2": { "type": "string", "description": "Alphabetically later UID" },
+        "status": { "type": "string", "enum": ["pending", "accepted"] },
+        "initiatorId": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["userIds", "user1", "user2", "status", "initiatorId", "createdAt", "updatedAt"]
+    },
+    "Wave": {
+      "title": "Wave",
+      "description": "A wave sent from one user to another",
+      "type": "object",
+      "properties": {
+        "fromId": { "type": "string" },
+        "toId": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "viewed": { "type": "boolean" },
+        "duration": { "type": "number", "description": "Duration of the wave in ms" }
+      },
+      "required": ["fromId", "toId", "createdAt", "viewed"]
+    },
+    "Bye": {
+      "title": "Bye",
+      "description": "A premium bye sent from one user to another",
+      "type": "object",
+      "properties": {
+        "fromId": { "type": "string" },
+        "toId": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "viewed": { "type": "boolean" }
+      },
+      "required": ["fromId", "toId", "createdAt", "viewed"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Public user profiles"
+    },
+    "users/{userId}/private/{docId}": {
+      "schema": "UserPrivate",
+      "description": "Private user info"
+    },
+    "locations/{userId}": {
+      "schema": "Location",
+      "description": "Current locations of users"
+    },
+    "friendships/{friendshipId}": {
+      "schema": "Friendship",
+      "description": "Friend connections"
+    },
+    "waves/{waveId}": {
+      "schema": "Wave",
+      "description": "Waves sent between users"
+    },
+    "byes/{byeId}": {
+      "schema": "Bye",
+      "description": "Byes sent between users"
+    }
+  }
+}

@@ -1,0 +1,238 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ----------------------------------------------------------------------
+    // GLOBAL PRIMITIVES
+    // ----------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function getFriendshipId(a, b) {
+      let minId = a < b ? a : b;
+      let maxId = a < b ? b : a;
+      return minId + '_' + maxId;
+    }
+
+    function isFriend(a, b) {
+      let fId = getFriendshipId(a, b);
+      return exists(/databases/$(database)/documents/friendships/$(fId)) && 
+             get(/databases/$(database)/documents/friendships/$(fId)).data.status == 'accepted';
+    }
+
+    // ----------------------------------------------------------------------
+    // VALIDATION HELPERS (Anti-Update-Gap)
+    // ----------------------------------------------------------------------
+    
+    function isValidUser(data) {
+      let hasKeys = data.keys().hasAll(['username', 'displayName', 'createdAt', 'color']);
+      let validTypes = data.username is string && data.username.size() > 0 && data.username.size() <= 100 &&
+                       data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 100 &&
+                       data.color is string && data.color.size() <= 20 &&
+                       data.createdAt is number;
+      return hasKeys && validTypes;
+    }
+
+    function isValidUserPrivate(data) {
+      let hasEmail = data.keys().hasAll(['email']);
+      let validKeys = data.keys().hasOnly(['email', 'recoveryEmail']);
+      let emailValid = data.email is string && data.email.size() > 0 && data.email.size() <= 200;
+      let recoveryEmailValid = !('recoveryEmail' in data) || (data.recoveryEmail is string && data.recoveryEmail.size() <= 200);
+      
+      return hasEmail && validKeys && emailValid && recoveryEmailValid;
+    }
+
+    function isValidLocation(data) {
+      let hasCore = data.keys().hasAll(['lat', 'lng', 'updatedAt']);
+      let hasHeading = data.keys().hasAny(['heading']) ? data.heading is number || data.heading == null : true;
+      let validTypes = data.lat is number && data.lng is number && data.updatedAt is number;
+      return hasCore && validTypes && hasHeading;
+    }
+
+    function isValidFriendship(data) {
+      let hasKeys = data.keys().hasAll(['userIds', 'user1', 'user2', 'status', 'initiatorId', 'createdAt', 'updatedAt']);
+      let validTypes = data.userIds is list && data.userIds.size() == 2 && 
+                       data.userIds[0] is string && data.userIds[1] is string &&
+                       data.user1 is string && data.user1.size() <= 128 &&
+                       data.user2 is string && data.user2.size() <= 128 &&
+                       data.status is string && (data.status == 'pending' || data.status == 'accepted') &&
+                       data.initiatorId is string && data.initiatorId.size() <= 128 &&
+                       data.createdAt is number && data.updatedAt is number;
+      return hasKeys && validTypes && data.user1 < data.user2;
+    }
+
+    function isValidWave(data) {
+      let hasKeys = data.keys().hasAll(['fromId', 'toId', 'createdAt', 'viewed']);
+      let validKeys = data.keys().hasOnly(['fromId', 'toId', 'createdAt', 'viewed', 'duration']);
+      let validTypes = data.fromId is string && data.fromId.size() <= 128 &&
+                       data.toId is string && data.toId.size() <= 128 &&
+                       data.createdAt is number && data.viewed is bool &&
+                       (!('duration' in data) || data.duration is number);
+      return hasKeys && validKeys && validTypes;
+    }
+
+    function isValidBye(data) {
+      let hasKeys = data.keys().hasAll(['fromId', 'toId', 'createdAt', 'viewed']);
+      let validKeys = data.keys().hasOnly(['fromId', 'toId', 'createdAt', 'viewed']);
+      let validTypes = data.fromId is string && data.fromId.size() <= 128 &&
+                       data.toId is string && data.toId.size() <= 128 &&
+                       data.createdAt is number && data.viewed is bool;
+      return hasKeys && validKeys && validTypes;
+    }
+
+    // ----------------------------------------------------------------------
+    // USERS COLLECTION
+    // ----------------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      // Wait: allow list for searching users by username. Everyone authenticated can list.
+      allow list: if isSignedIn();
+      
+      allow create: if isSignedIn() && isOwner(userId) && isValidId(userId) && 
+                    isValidUser(incoming()) && incoming().keys().size() == 4;
+                    
+      allow update: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'color']) &&
+                    incoming().username == existing().username &&
+                    incoming().createdAt == existing().createdAt;
+      
+      allow delete: if false;
+
+      // Private Info Subcollection
+      match /private/{docId} {
+        allow read: if isSignedIn() && isOwner(userId);
+        allow create: if isSignedIn() && isOwner(userId) && isValidUserPrivate(incoming()) && (incoming().keys().size() == 1 || incoming().keys().size() == 2);
+        allow update: if isSignedIn() && isOwner(userId) && isValidUserPrivate(incoming()) && 
+                      incoming().diff(existing()).affectedKeys().hasOnly(['email']);
+        allow delete: if false;
+      }
+    }
+
+    // ----------------------------------------------------------------------
+    // LOCATIONS COLLECTION
+    // ----------------------------------------------------------------------
+    match /locations/{userId} {
+      // Users can read their own location OR friends' locations
+      allow read: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isFriend(request.auth.uid, userId));
+      
+      allow create: if isSignedIn() && isOwner(userId) && isValidId(userId) && 
+                    isValidLocation(incoming());
+                    
+      allow update: if isSignedIn() && isOwner(userId) && isValidLocation(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['lat', 'lng', 'heading', 'updatedAt']);
+                    
+      // allow delete: if false; // Users might want to stop sharing
+      allow delete: if isSignedIn() && isOwner(userId);
+    }
+
+    // ----------------------------------------------------------------------
+    // FRIENDSHIPS COLLECTION
+    // ----------------------------------------------------------------------
+    match /friendships/{friendshipId} {
+      allow get: if isSignedIn() && isValidId(friendshipId) && (request.auth.uid in resource.data.userIds);
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.userIds);
+
+      allow create: if isSignedIn() && isValidId(friendshipId) &&
+                    isValidFriendship(incoming()) &&
+                    incoming().keys().size() == 7 &&
+                    friendshipId == getFriendshipId(incoming().user1, incoming().user2) &&
+                    incoming().initiatorId == request.auth.uid &&
+                    (request.auth.uid in incoming().userIds) &&
+                    incoming().status == 'pending';
+
+      allow update: if isSignedIn() && isValidFriendship(incoming()) &&
+                    // Use named action pattern
+                    (
+                      // Action: Accept Friendship
+                      (
+                        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+                        existing().status == 'pending' &&
+                        incoming().status == 'accepted' &&
+                        // Only the NON-initiator can accept
+                        request.auth.uid != existing().initiatorId &&
+                        (request.auth.uid in existing().userIds)
+                      )
+                    ) &&
+                    // Immutable checks
+                    incoming().user1 == existing().user1 &&
+                    incoming().user2 == existing().user2 &&
+                    incoming().initiatorId == existing().initiatorId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().userIds == existing().userIds;
+
+      allow delete: if isSignedIn() && isValidId(friendshipId) &&
+                    (request.auth.uid in existing().userIds);
+    }
+
+    // ----------------------------------------------------------------------
+    // WAVES COLLECTION
+    // ----------------------------------------------------------------------
+    match /waves/{waveId} {
+      // Read their own waves
+      allow read: if isSignedIn() && ((request.auth.uid == resource.data.fromId) || (request.auth.uid == resource.data.toId));
+      
+      // Create a wave to a mutual friend
+      allow create: if isSignedIn() && isValidWave(incoming()) && (incoming().keys().size() == 4 || incoming().keys().size() == 5) &&
+                    incoming().fromId == request.auth.uid &&
+                    isFriend(incoming().fromId, incoming().toId) &&
+                    incoming().viewed == false;
+
+      // Update a wave (only receiver can mark as viewed)
+      allow update: if isSignedIn() && isValidWave(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['viewed']) &&
+                    existing().toId == request.auth.uid &&
+                    incoming().viewed == true &&
+                    incoming().fromId == existing().fromId &&
+                    incoming().toId == existing().toId &&
+                    incoming().createdAt == existing().createdAt;
+
+      allow delete: if false;
+    }
+    // ----------------------------------------------------------------------
+    // BYES COLLECTION
+    // ----------------------------------------------------------------------
+    match /byes/{byeId} {
+      allow read: if isSignedIn() && ((request.auth.uid == resource.data.fromId) || (request.auth.uid == resource.data.toId));
+      
+      // We cannot easily verify "has been waved at" here without reading the waves collection,
+      // and checking monthly quota also requires reading multiple byes docs.
+      // So we delegate the quota and precondition checks to the client UI, but still
+      // enforce friendship and format.
+      allow create: if isSignedIn() && isValidBye(incoming()) && incoming().keys().size() == 4 &&
+                    incoming().fromId == request.auth.uid &&
+                    isFriend(incoming().fromId, incoming().toId) &&
+                    incoming().viewed == false;
+
+      allow update: if isSignedIn() && isValidBye(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['viewed']) &&
+                    existing().toId == request.auth.uid &&
+                    incoming().viewed == true &&
+                    incoming().fromId == existing().fromId &&
+                    incoming().toId == existing().toId &&
+                    incoming().createdAt == existing().createdAt;
+
+      allow delete: if false;
+    }
+  }
+}
